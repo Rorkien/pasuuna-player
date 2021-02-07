@@ -46,7 +46,11 @@
 							<h5 class="card-title" id="songname">No Song Loaded</h5>
 							<h6 class="card-subtitle" id="songdetails"></h6>
 
-							<p><button class="btn btn-primary btn-xs btn-block" id="play" disabled>▶ Play</button></p>
+							<div class="btn-group d-flex" role="group">
+								<button class="btn btn-primary btn-xs btn-block" id="rewind" disabled>⏪Rewind</button>
+								<button class="btn btn-primary btn-xs btn-block" id="play" disabled>▶Play</button>
+								<button class="btn btn-primary btn-xs btn-block" id="skip" disabled>⏩Skip</button>
+							</div>							
 
 							<form>
 								<div class="form-group">
@@ -76,6 +80,14 @@
 								data-url="https://api.modarchive.org/downloads.php?moduleid=35280#DEADLOCK.XM">
 								🎶 Deadlock (XM - FastTracker)
 							</li>
+							<li class="list-group-item"
+								data-url="https://api.modarchive.org/downloads.php?moduleid=133766#easter_egg.xm">
+								🎶 Påskchip (XM - FastTracker)
+							</li>
+							<li class="list-group-item"
+								data-url="https://api.modarchive.org/downloads.php?moduleid=34672#CookingItUp.mod">
+								🎶 Cooking It Up (MOD - ProTracker)
+							</li>
 						</ul>
 						<div class="card-body">
 							<footer class="blockquote-footer">
@@ -97,16 +109,21 @@
 			</div>
 		</div>
 
-		<script src="https://unpkg.com/@pinkkis/pasuuna-player@^0.5.0/dist/pasuunaplayer.js"></script>
+		<script src="pasuunaplayer.js"></script>
 		<script>
 			document.addEventListener('DOMContentLoaded', () => {
 				const playButton = document.getElementById("play");
+				const rewindButton = document.getElementById("rewind");
+				const skipButton = document.getElementById("skip");
 				const volumeBar = document.getElementById("volume");
 				const playlist = document.getElementById("playlist");
 				const songName = document.getElementById("songname");
 				const songDetails = document.getElementById("songdetails");
 				const instrumentsContainer = document.getElementById("instruments");
 				const tracker = new PasuunaPlayer.Tracker();
+
+				//Makes the tracker object accessible from the console window
+				window.tracker = tracker;
 
 				tracker.init();
 
@@ -171,6 +188,14 @@
 						togglePlay();
 					};
 
+					rewindButton.onclick = () => {
+						tracker.setPattern(tracker.getPattern() - 1, true, true);
+					};
+
+					skipButton.onclick = () => {
+						tracker.setPattern(tracker.getPattern() + 1, true, true);
+					};
+
 					volumeBar.oninput = volumeBar.onchange = () => {
 						tracker.audio.masterVolume.gain.cancelScheduledValues(0);
 						tracker.audio.masterVolume.gain.setValueAtTime(volumeBar.value / 100, 0);
@@ -187,10 +212,14 @@
 
 					function togglePlay() {
 						if (!tracker.isPlaying) {
-							playButton.innerHTML = "⏹ Stop";
+							playButton.innerHTML = "⏹Stop";
+							skipButton.disabled = false;
+							rewindButton.disabled = false;
 							tracker.playSong();
 						} else {
-							playButton.innerHTML = "▶ Play";
+							playButton.innerHTML = "▶Play";
+							skipButton.disabled = true;
+							rewindButton.disabled = true;
 							tracker.stop();
 						}
 					}

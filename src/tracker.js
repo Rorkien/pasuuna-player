@@ -7,7 +7,8 @@ import { BinaryStream } from './binaryStream';
 import { events } from './events';
 import { Audio } from './audio';
 
-import {EVENT,
+import {
+	EVENT,
 	PLAYTYPE,
 	NOTEPERIOD,
 	FTNOTEPERIOD,
@@ -35,24 +36,19 @@ export class Tracker {
 		this.song = null;
 		this.instruments = [];
 
+		this.playType = PLAYTYPE.song;
+		this.patternIndex = 0;
+		this.patternStep = 0;
+		this.patternNumber = null;
+		this.patternData = null;
+
 		this.currentInstrumentIndex = 1;
 		this.prevInstrumentIndex = null;
-
-		this.currentPattern = 0;
-		this.prevPattern = null;
-		this.currentPatternPos = 0;
-		this.prevPatternPos = null;
-
-		this.currentPlayType = PLAYTYPE.song;
-		this.currentPatternData = null;
-
-		this.currentSongPosition = 0;
-		this.prevSongPosition = 0;
 
 		this.vibratoFunction = null;
 		this.tremoloFunction = null;
 
-		this.bpm = 125; // bmp
+		this.bpm = 125;
 		this.ticksPerStep = 6;
 		this.tickTime = 2.5 / this.bpm;
 		this.mainTimer = null;
@@ -153,6 +149,18 @@ export class Tracker {
 		}
 	}
 
+	stopNotes() {
+		for (let i = 0; i < this.trackCount; i++) {
+			if (this.trackNotes[i].source) {
+				try {
+					this.trackNotes[i].source.stop()
+				} catch (e) {
+					// swallow error
+				}
+			}
+		}
+	}
+
 	clearEffectsCache() {
 		this.trackEffectCache = [];
 
@@ -161,65 +169,114 @@ export class Tracker {
 		}
 	}
 
-	setCurrentPattern(index) {
-		this.currentPattern = index;
-		this.currentPatternData = this.song.patterns[this.currentPattern];
+	/**
+	 * Sets the pattern number. Updates the pattern index automatically.
+	 *
+	 * The pattern number differs from the index in that the former is a pattern
+	 * specifically named by a number and can appear multiple times in a song.
+	 * The latter specifies the order that said patterns should be played.
+	 * 
+	 * The song object specifies both:
+	 * `song.patterns` specifies the pattern numbers (`song.pattern[0]` is the
+	 * pattern named 0, and isn't necessarily the first pattern to be played).
+	 * 
+	 * `song.patternTable` specifies the indexes. `song.patternTable[0]`
+	 * specifies the number of the pattern that should be played first.
+	 * 
+	 * @param {number} number The pattern number. Refers to the first entry to
+	 * that pattern in the song. Range is undefined, as it is specified by the
+	 * song author.
+	 * @param {boolean} resetStep Indicates that the tracker should play the
+	 * specified pattern from the beggining. Defaults true.
+	 * @param {boolean} stopNotes Indicates that the tracker should stop the
+	 * currently playing samples before changing the current pattern. Defaults
+	 * false.
+	 */
+	setPatternByNumber(number, resetStep = true, stopNotes = false) {
+		if (number < 0) number = 0;
 
-		if (!this.currentPatternData) {
+		this.patternNumber = number;
+		this.patternIndex = this.song.patternTable.indexOf(this.patternNumber);
+		this.patternData = this.song.patterns[this.patternNumber];
+
+		if (!this.patternData) {
 			// insert empty pattern;
-			this.currentPatternData = this.getEmptyPattern();
+			this.patternData = this.getEmptyPattern();
 			this.song.patterns[this.currentPattern] = this.currentPatternData;
 		}
-		this.patternLength = this.currentPatternData.length;
+		this.patternLength = this.patternData.length;
 
-		if (this.prevPattern != this.currentPattern) {
-			events.emit(EVENT.patternChange, this.currentPattern);
+		if (stopNotes) this.stopNotes();
+		if (resetStep) this.patternStep = 0;
+
+		events.emit(EVENT.patternChange, {patternIndex: this.patternIndex, pattern: this.patternData});
+	}
+
+	getPatternNumber() {
+		return this.patternNumber;
+	}
+
+	/**
+	 * Sets the pattern index. Updates the pattern number automatically.
+	 * If the index if beyond the track's length, replays the song from the
+	 * specified restart pattern.
+	 * TODO: Check for any pattern jumps on the nearest pattern and replay the
+	 * song from that pattern instead. (Happens in CookingItUp.mod, the pattern
+	 * jump in the last pattern (3) is different from the restart position (0))
+	 * 
+	 * @param {number} index The pattern index. Refers to the order that the
+	 * patterns must be played. Ranges from zero to the amount of patterns in the
+	 * song.
+	 * @param {boolean} resetStep Indicates that the tracker should play the
+	 * specified pattern from the beggining. Defaults true.
+	 * @param {boolean} stopNotes Indicates that the tracker should stop the
+	 * currently playing samples before changing the current pattern. Defaults
+	 * false.
+	 */
+	setPattern(index, resetStep = true, stopNotes = false) {
+		if (index < 0) index = 0;
+		else if (index >= this.song.length) {
+			index = this.song.restartPosition ? this.song.restartPosition - 1 : 0;
+			this.events.emit(EVENT.songRestart, index);
 		}
 
-		this.prevPattern = this.currentPattern;
+		this.patternIndex = index;
+		this.patternNumber = this.song.patternTable[this.patternIndex];
+		this.patternData = this.song.patterns[this.patternNumber];
+
+		if (stopNotes) this.stopNotes();
+		if (resetStep) this.patternStep = 0;
+
+		events.emit(EVENT.patternChange, {patternIndex: this.patternIndex, pattern: this.patternData});
 	}
 
-	getCurrentPattern() {
-		return this.currentPattern;
+	getPattern() {
+		return this.patternIndex;
 	}
 
-	getCurrentPatternData() {
-		return this.currentPatternData;
-	}
-
-	updatePatternTable(index, value) {
-		this.song.patternTable[index] = value;
-		events.emit(EVENT.patternTableChange, value);
-		if (index == this.currentSongPosition) {
-			this.prevPattern = undefined;
-			this.setCurrentPattern(value);
-		}
-	}
-
-	setCurrentPatternPos(index) {
-		this.currentPatternPos = index;
-		if (this.prevPatternPos != this.currentPatternPos) {
-			events.emit(EVENT.patternPosChange, { current: this.currentPatternPos, prev: this.prevPatternPos });
-		}
-
-		this.prevPatternPos = this.currentPatternPos;
+	getPatternData() {
+		return this.patternData;
 	}
 
 	setPlayType(playType) {
-		this.currentPlayType = playType;
-		events.emit(EVENT.playTypeChange, this.currentPlayType);
+		this.playType = playType;
+		events.emit(EVENT.playTypeChange, this.playType);
 	}
 
 	getPlayType() {
-		return this.currentPlayType;
+		return this.playType;
 	}
 
-	playSong() {
+	playSong(index = 0) {
 		this.stop();
 		this.audio.checkState();
 		this.setPlayType(PLAYTYPE.song);
 		this.isPlaying = true;
-		this.playPatternIndex(this.currentPattern);
+
+		if (this.getPattern() !== index) {
+			this.setPattern(index);
+		}
+		this.playPatternIndex();
 		events.emit(EVENT.playingChange, this.isPlaying);
 	}
 
@@ -234,16 +291,7 @@ export class Tracker {
 		}
 
 		this.clearEffectsCache();
-
-		for (let i = 0; i < this.trackCount; i++) {
-			if (this.trackNotes[i].source) {
-				try {
-					this.trackNotes[i].source.stop();
-				} catch (e) {
-					// swallow error
-				}
-			}
-		}
+		this.setPattern(0, true, true);
 
 		this.isPlaying = false;
 		events.emit(EVENT.playingChange, this.isPlaying);
@@ -263,9 +311,7 @@ export class Tracker {
 		}
 	}
 
-	playPatternIndex(patternIndex) {
-		this.patternIndex = this.patternIndex || 0;
-
+	playPatternIndex() {
 		this.clock = this.clock || new WAAClock(this.audio.context);
 		this.clock.start();
 		this.audio.enable();
@@ -273,13 +319,10 @@ export class Tracker {
 		this.patternLoopStart = [];
 		this.patternLoopCount = [];
 
-		this.currentPatternData = this.song.patterns[patternIndex];
-
-		let thisPatternLength = this.currentPatternData.length;
+		let thisPatternLength = this.patternData.length;
 		let stepResult = {};
 
 		// look-ahead playback - far less demanding, works OK on mobile devices
-		let p = 0;
 		let time = this.audio.context.currentTime + 0.1; // add small delay to allow some time to render the first notes before playing
 
 		// start with a small delay then make it longer
@@ -287,14 +330,10 @@ export class Tracker {
 		let delay = SETTINGS.playbackDelayStart;
 		const playingDelay = SETTINGS.playbackDelay;
 
-		let playPatternData = this.currentPatternData;
-		let playSongPosition = this.currentSongPosition;
 		this.trackerStates = [];
-
-		this.events.emit(EVENT.patternChange, {patternIndex: patternIndex, pattern: this.currentPatternData});
 		this.mainTimer = this.clock.setTimeout(function (event) {
 
-			if (p > 1) {
+			if (this.patternStep > 1) {
 				delay = playingDelay;
 				this.mainTimer.repeat(delay);
 			}
@@ -320,7 +359,7 @@ export class Tracker {
 					return;
 				}
 
-				this.setStateAtTime(time, { patternPos: p, songPos: playSongPosition });
+				this.setStateAtTime(time, { patternStep: this.patternStep, patternNumber: this.patternNumber });
 
 				if (stepResult.patternDelay) {
 					// the E14 effect is used: delay Pattern but keep processing effects
@@ -332,20 +371,20 @@ export class Tracker {
 
 					time += this.ticksPerStep * this.tickTime;
 				} else {
-					stepResult = this.playPatternStep(p, time, playPatternData, playSongPosition);
+					stepResult = this.playPatternStep(this.patternStep, time, this.patternData, this.patternIndex);
 					time += this.ticksPerStep * this.tickTime;
-					p++;
+					this.patternStep++;
 
-					if (p >= thisPatternLength || stepResult.patternBreak) {
-						if (!(stepResult.positionBreak && stepResult.targetSongPosition == playSongPosition)) {
+					if (this.patternStep >= thisPatternLength || stepResult.patternBreak) {
+						if (!(stepResult.positionBreak && stepResult.targetSongPosition == this.patternIndex)) {
 							//We're not in a pattern loop
 							this.patternLoopStart = [];
 							this.patternLoopCount = [];
 						}
-						p = 0;
+						this.patternStep = 0;
 
 						if (this.getPlayType() == PLAYTYPE.song) {
-							let nextPosition = stepResult.positionBreak ? stepResult.targetSongPosition : ++playSongPosition;
+							let nextPosition = stepResult.positionBreak ? stepResult.targetSongPosition : this.patternIndex + 1;
 							if (nextPosition >= this.song.length) {
 								nextPosition = this.song.restartPosition ? this.song.restartPosition - 1 : 0;
 								this.events.emit(EVENT.songRestart, nextPosition);
@@ -355,29 +394,26 @@ export class Tracker {
 								nextPosition = 0;
 							}
 
-							playSongPosition = nextPosition;
-							patternIndex = this.song.patternTable[playSongPosition];
-							playPatternData = this.song.patterns[patternIndex];
+							this.setPattern(nextPosition);
 
-							this.events.emit(EVENT.patternChange, {patternIndex: patternIndex, pattern: playPatternData});
 							// some invalid(?) XM files have non-existent patterns in their song list - eg. cybernautic_squierl.xm
-							if (!playPatternData) {
-								playPatternData = this.getEmptyPattern();
-								this.song.patterns[patternIndex] = playPatternData;
+							if (!this.patternData) {
+								this.patternData = this.getEmptyPattern();
+								this.song.patterns[this.patternIndex] = this.patternData;
 							}
 
-							thisPatternLength = playPatternData.length;
+							thisPatternLength = this.patternData.length;
 							if (stepResult.patternBreak) {
-								p = stepResult.targetPatternPosition || 0;
-								if (p > playPatternData.length) {
-									p = 0; // occurs in the wild - example 'Lake Of Sadness' - last pattern
+								this.patternStep = stepResult.targetPatternPosition || 0;
+								if (this.patternStep > this.patternData.length) {
+									this.patternStep = 0; // occurs in the wild - example 'Lake Of Sadness' - last pattern
 								}
 							}
 						} else {
 							if (stepResult.patternBreak) {
-								p = stepResult.targetPatternPosition || 0;
-								if (p > thisPatternLength) {
-									p = 0;
+								this.patternStep = stepResult.targetPatternPosition || 0;
+								if (this.patternStep > thisPatternLength) {
+									this.patternStep = 0;
 								}
 							}
 						}
@@ -412,8 +448,8 @@ export class Tracker {
 		}.bind(this), 0.01).repeat(delay).tolerance({ early: 0.1 });
 	}
 
-	playPatternStep(step, time, patternData, songPostition) {
-		patternData = patternData || currentPatternData;
+	playPatternStep(step, time, patternData, songPosition) {
+		patternData = patternData;
 		// note: patternData can be different than currentPatternData when playback is active with long look ahead times
 
 		const patternStep = patternData[step];
@@ -446,7 +482,7 @@ export class Tracker {
 			const note = patternStep[i];
 			if (note) {
 				const songPos = {
-					position: songPostition,
+					position: songPosition,
 					step: step
 				};
 
@@ -1649,7 +1685,7 @@ export class Tracker {
 	setPatternLength(value) {
 		this.patternLength = value;
 
-		const currentLength = this.song.patterns[this.currentPattern].length;
+		const currentLength = this.song.patterns[this.patternNumber].length;
 		if (currentLength === this.patternLength) {
 			return;
 		}
@@ -1660,12 +1696,12 @@ export class Tracker {
 				for (let channel = 0; channel < this.trackCount; channel++) {
 					row.push(new Note(this));
 				}
-				this.song.patterns[this.currentPattern].push(row);
+				this.song.patterns[this.patternNumber].push(row);
 			}
 		} else {
-			this.song.patterns[this.currentPattern] = this.song.patterns[this.currentPattern].splice(0, this.patternLength);
-			if (this.currentPatternPos >= this.patternLength) {
-				this.setCurrentPatternPos(this.patternLength - 1);
+			this.song.patterns[this.patternNumber] = this.song.patterns[this.patternNumber].splice(0, this.patternLength);
+			if (this.patternIndex >= this.patternLength) {
+				this.setPattern(this.patternLength - 1);
 			}
 		}
 
@@ -1770,17 +1806,10 @@ export class Tracker {
 		if (this.song.channels) {
 			this.setTrackCount(this.song.channels);
 		}
-
-		this.prevPatternPos = undefined;
-		this.prevInstrumentIndex = undefined;
-		this.prevPattern = undefined;
-		this.prevSongPosition = undefined;
-
-
+		
 		if (this.song.patternTable) {
-			this.setCurrentPattern(this.song.patternTable[0]);
+			this.setPattern(0);
 		}
-		this.setCurrentPatternPos(0);
 
 		this.clearEffectsCache();
 
